@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xlsx-textdump"
+version = "0.1.0"
+description = "Dump Excel workbook formulas, constants, named ranges, data validation and conditional formatting to text for Git diffs"
+requires-python = ">=3.9"
+dependencies = ["openpyxl>=3.1"]
+
+[project.scripts]
+xlsx-textdump = "xlsx_textdump:main"
+
+[tool.setuptools]
+py-modules = ["xlsx_textdump"]

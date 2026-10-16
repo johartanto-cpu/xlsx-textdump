@@ -1,0 +1,7 @@
+- id: xlsx-textdump
+  name: Dump Excel formulas to text
+  description: Writes <workbook>.txt with formulas, constants, named ranges, data validation and conditional formatting.
+  entry: xlsx-textdump
+  language: python
+  files: \.(xlsx|xlsm)$
+  exclude: (^|/)~\$
