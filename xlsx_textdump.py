@@ -105,17 +105,68 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+# OOXML attribute defaults. An attribute at its default is omitted, so files written
+# by Excel (which omits defaults) and by other tools (which write them out) dump identically.
+DEFAULTS = {
+    # data validation
+    "type": "none", "errorStyle": "stop", "imeMode": "noControl", "operator": "between",
+    "allowBlank": "0", "showDropDown": "0", "showErrorMessage": "0", "showInputMessage": "0",
+    # conditional formatting rules
+    "aboveAverage": "1", "bottom": "0", "equalAverage": "0", "percent": "0", "stopIfTrue": "0",
+    # cfvo / colour scale / data bar / icon set
+    "gte": "1", "showValue": "1", "reverse": "0", "minLength": "10", "maxLength": "90",
+    "iconSet": "3TrafficLights1",
+}
+# Attributes that only mean something for particular rule/validation types
+ONLY_FOR_TYPE = {
+    "aboveAverage": {"aboveAverage"}, "equalAverage": {"aboveAverage"}, "stdDev": {"aboveAverage"},
+    "rank": {"top10"}, "percent": {"top10"}, "bottom": {"top10"},
+    "text": {"containsText", "notContainsText", "beginsWith", "endsWith"},
+    "timePeriod": {"timePeriod"},
+}
+NO_OPERATOR_TYPES = {"list", "custom", "none", "any"}  # DV types where operator is ignored
+BOOL = {"true": "1", "false": "0"}
+
+
+def _norm(name: str, value: str) -> str:
+    """Normalise true/false -> 1/0 for boolean attributes only."""
+    if DEFAULTS.get(name) in ("0", "1"):
+        return BOOL.get(value.lower(), value)
+    return value
+
+
 def _attrs(el) -> str:
-    items = sorted((_local(k), v) for k, v in el.attrib.items() if _local(k) not in SKIP_ATTRS)
+    """Logic-bearing attributes only: defaults, empties and irrelevant ones dropped."""
+    a = {_local(k): _norm(_local(k), v) for k, v in el.attrib.items() if _local(k) not in SKIP_ATTRS}
+    kind = _local(el.tag)
+    typ = a.get("type")
+    if kind == "cfvo" and typ in ("min", "max"):
+        a.pop("val", None)  # min/max thresholds have no value
+    if kind == "dataValidation" and typ in NO_OPERATOR_TYPES:
+        a.pop("operator", None)
+    if kind == "cfRule":
+        for attr, types in ONLY_FOR_TYPE.items():
+            if typ not in types:
+                a.pop(attr, None)
+    items = sorted((k, v) for k, v in a.items() if v != "" and DEFAULTS.get(k) != v)
     return " ".join(f"{k}={v}" for k, v in items)
 
 
-def _children(el) -> str:
+def _dv_skip(el) -> set[str]:
+    """formula2 only applies to between/notBetween on numeric-style validations."""
+    typ = el.get("type", "none")
+    op = el.get("operator", "between")
+    if typ in NO_OPERATOR_TYPES or op not in ("between", "notBetween"):
+        return {"formula2"}
+    return set()
+
+
+def _children(el, skip: set[str] = frozenset()) -> str:
     """Flatten logic-bearing children: formulas and cfvo thresholds etc."""
     parts = []
     for ch in el:
         tag = _local(ch.tag)
-        if tag in SKIP_TAGS:
+        if tag in SKIP_TAGS or tag in skip:
             continue
         if tag in ("formula", "formula1", "formula2", "f"):
             # x14 wraps formulas as <x14:formula1><xm:f>..</xm:f></x14:formula1>
@@ -152,10 +203,12 @@ def sheet_xml_paths(workbook: Path) -> dict[str, str]:
 
 def dump_validations(root) -> list[str]:
     rows = []
-    for dv in root.findall("m:dataValidations/m:dataValidation", NS):
-        rows.append(f"{_sqref(dv)}: {_attrs(dv)} | {_children(dv)}".rstrip(" |"))
-    for dv in root.findall("m:extLst/m:ext/x14:dataValidations/x14:dataValidation", NS):
-        rows.append(f"{_sqref(dv)}: {_attrs(dv)} | {_children(dv)} (x14)".replace(" |  (x14)", " (x14)"))
+    found = [(dv, "") for dv in root.findall("m:dataValidations/m:dataValidation", NS)]
+    found += [(dv, " (x14)") for dv in
+              root.findall("m:extLst/m:ext/x14:dataValidations/x14:dataValidation", NS)]
+    for dv, tag in found:
+        body = _children(dv, _dv_skip(dv))
+        rows.append(f"{_sqref(dv)}: {_attrs(dv)}" + (f" | {body}" if body else "") + tag)
     return sorted(rows)
 
 
